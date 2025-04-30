@@ -192,10 +192,9 @@ def extract_filing_content(url):
                 content = text[start_pos:].strip()
                 
             # 특수 문자 처리
-            content = content.encode('ascii', 'ignore').decode('ascii')
+            # content = content.encode('ascii', 'ignore').decode('ascii')
             content = re.sub(r'\s*\n\s*', '\n', content)  # 줄바꿈 주변 공백 제거
-            # content = re.sub(r'\n{3,}', '\n\n', content)  # 3개 이상 연속된 줄바꿈을 2개로
-            # content = re.sub(r'[ \t]+', ' ', content)     # 연속된 공백을 하나로
+            content = clean_non_ascii_newlines(content)
         else:
             content = ""
         
@@ -204,6 +203,13 @@ def extract_filing_content(url):
     except Exception as e:
         print(f"공시 내용 추출 실패 ({url}): {str(e)}")
         return [], ""
+
+def clean_non_ascii_newlines(text):
+    """
+    아스키코드가 아닌 값들은 가끔 앞or뒤에 줄바꿈이 있는 경우가 있어 줄바꿈 제거
+    """
+    # 앞뒤 줄바꿈이 하나도 없어도, 하나만 있어도, 여러 개 있어도 모두 매칭
+    return re.sub(r'\n*([^\x00-\x7F])\n*', r'\1', text)
 
 # Item 유형 매핑 정의
 item_type_mapping_en = {
@@ -319,7 +325,7 @@ def add_item_types_to_filings(input_file):
 
 if __name__ == "__main__":
     # URL 수집 함수 호출 (현재는 주석 처리)
-    collect_all_recent_8k_filings()
+    # collect_all_recent_8k_filings()
     
     # 가장 최근의 8-K 파일 찾기
     csv_files = [f for f in os.listdir('.') if f.startswith('8k_filings_') and f.endswith('.csv')]
