@@ -161,6 +161,7 @@ def get_filing_urls_by_type(ticker, filing_type, limit=10):
 def extract_filing_text(url):
     """
     공시 URL에서 텍스트 내용을 추출합니다.
+    'Item'으로 시작하는 부분부터 본문으로 간주하여 추출합니다.
     
     Args:
         url (str): 공시 URL
@@ -185,6 +186,12 @@ def extract_filing_text(url):
         
         # 모든 텍스트 추출
         text = soup.get_text()
+        
+        # 'Item'으로 시작하는 부분 찾기
+        item_index = text.find('Item')
+        if item_index != -1:
+            # 'Item' 이후의 텍스트만 추출
+            text = text[item_index:]
         
         # 문장 단위로 분리하고 띄어쓰기 추가
         # 마침표, 물음표, 느낌표 뒤에 공백 추가
@@ -239,7 +246,7 @@ def classify_filing_with_gpt(text, form_types):
         form_types (list): 공시 유형 정보 리스트
         
     Returns:
-        str: 분류된 report_item 값
+        tuple: (분류된 report_item 값, 분류 이유)
     """
     # OpenAI 클라이언트 초기화
     client = OpenAI()
@@ -250,31 +257,45 @@ You are an expert at classifying SEC filings into predefined categories.
 Below is the list of possible report_item codes and their descriptions:
 {json.dumps(form_types, indent=2, ensure_ascii=False)}
 
-Analyze the given filing text and return **only one** report_item code (e.g. "1.2.1") 
-that best matches the content. Discard any irrelevant boilerplate and focus on the core event.
-Your response **must** be exactly one of the codes listed above, with **no** additional text.
-"""
+Analyze the given filing text and return two things:
+1. The report_item code (e.g. "1.2.1") that best matches the content
+2. A brief explanation (1-2 sentences) of why you chose this classification
 
+Format your response exactly like this:
+CODE: [report_item code]
+REASON: [your brief explanation]
+
+Discard any irrelevant boilerplate and focus on the core event.
+"""
 
     try:
         # GPT API 호출
         response = client.chat.completions.create(
-            model="gpt-4o-mini-2024-07-18",
+            model="gpt-4.1-mini-2025-04-14",
             messages=[
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": text}
             ],
             temperature=0.3,  # 더 결정적인 응답을 위해 낮은 temperature 사용
-            max_tokens=50     # 짧은 응답만 필요하므로 토큰 수 제한
+            max_tokens=150    # 이유 설명을 위해 토큰 수 증가
         )
         
-        # 응답에서 report_item 값 추출
-        classification = response.choices[0].message.content.strip()
-        return classification
+        # 응답에서 report_item 값과 이유 추출
+        response_text = response.choices[0].message.content.strip()
+        code_match = re.search(r'CODE:\s*([\d.]+)', response_text)
+        reason_match = re.search(r'REASON:\s*(.+?)(?=\n|$)', response_text)
+        
+        if code_match and reason_match:
+            classification = code_match.group(1)
+            reason = reason_match.group(1).strip()
+            return classification, reason
+        else:
+            print("GPT 응답 형식이 올바르지 않습니다.")
+            return None, None
         
     except Exception as e:
         print(f"GPT 분류 실패: {str(e)}")
-        return None
+        return None, None
 
 def save_filings_to_csv(ticker, filing_type="8-K", limit=10):
     """
@@ -303,7 +324,7 @@ def save_filings_to_csv(ticker, filing_type="8-K", limit=10):
     csv_filename = f'{ticker}_{filing_type}_filings.csv'
     with open(csv_filename, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['Ticker', 'URL', 'Text', 'Classification'])
+        writer.writerow(['Ticker', 'URL', 'Text', 'Classification', 'Reason'])
         
         # 각 공시에 대해 텍스트 추출 및 분류
         for url in filing_urls:
@@ -311,10 +332,11 @@ def save_filings_to_csv(ticker, filing_type="8-K", limit=10):
             text = extract_filing_text(url)
             if text:
                 # GPT로 분류
-                classification = classify_filing_with_gpt(text, form_types)
-                writer.writerow([ticker, url, text, classification])
+                classification, reason = classify_filing_with_gpt(text, form_types)
+                writer.writerow([ticker, url, text, classification, reason])
                 print(url)
-                print(classification)
+                print(f"분류: {classification}")
+                print(f"이유: {reason}")
                 print()
     
     print(f"\n{ticker}의 {filing_type} 공시 내용이 {csv_filename} 파일로 저장되었습니다.")
