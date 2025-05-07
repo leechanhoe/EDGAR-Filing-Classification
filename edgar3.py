@@ -1,47 +1,56 @@
 import pandas as pd
 import re
 
-input_file = '8k_raw_data_sample_100.csv'
-output_file = '8k_raw_data_sample_100_split.csv'
+input_file = 'a.csv'
+output_file = 'b.csv'
 
 df = pd.read_csv(input_file)
 
 rows = []
 
 for _, row in df.iterrows():
+    # 각 필드 분리 (쉼표+공백 조합도 고려)
     item_numbers = [x.strip() for x in str(row['Item Numbers']).split(',') if x.strip()]
     item_desc_en = [x.strip() for x in str(row['Item Descriptions (EN)']).split(',') if x.strip()]
     item_desc_kr = [x.strip() for x in str(row['Item Descriptions (KR)']).split(',') if x.strip()]
     content_full = str(row['Content'])
-
-    # 각 Item별로 Content를 분리
-    item_spans = []
-    for item in item_numbers:
-        # 패턴: ITEM X.XX (대소문자 구분 없이, 공백 허용)
-        match = re.search(r'(?i)(ITEM\s*' + re.escape(item) + r')', content_full)
-        if match:
-            item_spans.append((item, match.start()))
+    
+    # Content를 Item별로 분리
+    item_contents = {}
+    current_item = None
+    current_content = []
+    
+    # Content를 줄 단위로 분리
+    lines = content_full.split('\n')
+    for line in lines:
+        # Item 패턴 찾기 (대소문자 구분 없이)
+        for item in item_numbers:
+            pattern = f'item\\s*{item}'
+            if re.search(pattern, line.lower()):
+                if current_item and current_content:
+                    item_contents[current_item] = '\n'.join(current_content)
+                current_item = item
+                current_content = [line]
+                break
         else:
-            item_spans.append((item, None))
+            if current_item:
+                current_content.append(line)
+    
+    # 마지막 Item의 content 저장
+    if current_item and current_content:
+        item_contents[current_item] = '\n'.join(current_content)
 
-    # 시작 위치 기준으로 정렬
-    item_spans = sorted([s for s in item_spans if s[1] is not None], key=lambda x: x[1])
-
-    for i, (item, start) in enumerate(item_spans):
+    # 각 Item별로 행 생성
+    for i, item in enumerate(item_numbers):
         desc_en = item_desc_en[i] if i < len(item_desc_en) else ''
         desc_kr = item_desc_kr[i] if i < len(item_desc_kr) else ''
-        if start is not None:
-            if i + 1 < len(item_spans):
-                end = item_spans[i+1][1]
-            else:
-                end = None
-            content = content_full[start:end].strip() if end else content_full[start:].strip()
-        else:
-            content = ''
+        content = item_contents.get(item, '')
+        
         rows.append({
             'Ticker': row['Ticker'],
             'URL': row['URL'],
             'Filing Date': row['Filing Date'],
+            'Accession Number': row['Accession Number'],
             'Item Numbers': item,
             'Item Descriptions (EN)': desc_en,
             'Item Descriptions (KR)': desc_kr,

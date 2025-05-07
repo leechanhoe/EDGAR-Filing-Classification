@@ -81,7 +81,7 @@ def get_recent_8k_filings(cik, ticker, one_month_ago):
                 filing_date = datetime.strptime(filing_date, '%Y-%m-%d')
                 if filing_date >= one_month_ago:
                     filing_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_num.replace('-','')}/{primary_doc}"
-                    filing_urls.append((ticker, filing_url, filing_date.strftime('%Y-%m-%d')))
+                    filing_urls.append((ticker, acc_num, filing_url, filing_date.strftime('%Y-%m-%d')))
         
         return filing_urls
         
@@ -122,7 +122,7 @@ def collect_all_recent_8k_filings(end_date=None):
     output_file = f'8k_filings_{end_date.strftime("%Y%m%d")}.csv'
     with open(output_file, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['Ticker', 'URL', 'Filing Date'])
+        writer.writerow(['Ticker', 'Accession Number', 'URL', 'Filing Date'])
         writer.writerows(all_filings)
     
     print(f"\n총 {len(all_filings)}개의 8-K 공시가 {output_file}에 저장되었습니다.")
@@ -325,7 +325,7 @@ def add_item_types_to_filings(input_file):
 
 if __name__ == "__main__":
     # URL 수집 함수 호출 (현재는 주석 처리)
-    # collect_all_recent_8k_filings()
+    collect_all_recent_8k_filings()
     
     # 가장 최근의 8-K 파일 찾기
     csv_files = [f for f in os.listdir('.') if f.startswith('8k_filings_') and f.endswith('.csv')]
