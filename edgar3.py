@@ -1,8 +1,8 @@
 import pandas as pd
 import re
 
-input_file = 'a.csv'
-output_file = 'b.csv'
+input_file = '8k_filings_20250507_with_content.csv'
+output_file = '8k_raw_data.csv'
 
 df = pd.read_csv(input_file)
 
