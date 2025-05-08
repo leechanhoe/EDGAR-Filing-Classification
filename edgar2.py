@@ -91,10 +91,13 @@ def get_recent_8k_filings(cik, ticker, one_month_ago):
 
 def collect_all_recent_8k_filings(end_date=None):
     """
-    전 종목의 최근 한달간의 8-K 공시 URL을 수집하여 CSV 파일로 저장합니다.
+    전 종목의 최근 한달간의 8-K 공시 URL을 수집합니다.
     
     Args:
         end_date (datetime, optional): 기준 날짜. 기본값은 현재 날짜입니다.
+        
+    Returns:
+        list: (티커, Accession Number, URL, 공시일자) 튜플의 리스트
     """
     # 기준 날짜 설정
     if end_date is None:
@@ -106,7 +109,7 @@ def collect_all_recent_8k_filings(end_date=None):
     # 기업 정보 가져오기
     companies_df = get_company_tickers()
     if companies_df is None:
-        return
+        return []
     
     # 결과를 저장할 리스트
     all_filings = []
@@ -118,14 +121,28 @@ def collect_all_recent_8k_filings(end_date=None):
         filings = get_recent_8k_filings(company['cik'], company['ticker'], one_month_ago)
         all_filings.extend(filings)
     
-    # CSV 파일로 저장
-    output_file = f'8k_filings_{end_date.strftime("%Y%m%d")}.csv'
-    with open(output_file, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(['Ticker', 'Accession Number', 'URL', 'Filing Date'])
-        writer.writerows(all_filings)
+    # 중복 검사 및 제거
+    accnum_dict = {}
+    duplicates = []
+    unique_filings = []
     
-    print(f"\n총 {len(all_filings)}개의 8-K 공시가 {output_file}에 저장되었습니다.")
+    for filing in all_filings:
+        ticker, acc_num, url, filing_date = filing
+        if acc_num in accnum_dict:
+            duplicates.append((ticker, acc_num, url, filing_date))
+            print(f"중복 발견: {ticker} - {acc_num}")
+            print(f"  기존: {accnum_dict[acc_num]}")
+            print(f"  중복: {url}")
+        else:
+            accnum_dict[acc_num] = url
+            unique_filings.append(filing)
+    
+    if duplicates:
+        print(f"\n총 {len(duplicates)}개의 중복된 Accession Number가 발견되었습니다.")
+        print("중복된 항목은 제외하고 저장됩니다.")
+    
+    print(f"\n총 {len(unique_filings)}개의 8-K 공시가 수집되었습니다.")
+    return unique_filings
 
 def extract_filing_content(url):
     """
@@ -282,16 +299,19 @@ item_type_mapping_kr = {
     "9.01": "재무제표 및 첨부자료 제출"
 }
 
-def add_item_types_to_filings(input_file):
+def process_filings(filings):
     """
-    기존 CSV 파일에서 각 공시의 Item 유형과 본문을 추출하여 새로운 CSV 파일을 생성합니다.
+    수집된 공시 데이터를 처리하여 Item 유형과 본문을 추출하고 Item별로 분리합니다.
     
     Args:
-        input_file (str): 입력 CSV 파일 경로
+        filings (list): (티커, Accession Number, URL, 공시일자) 튜플의 리스트
+        
+    Returns:
+        pandas.DataFrame: 처리된 데이터를 담은 DataFrame
     """
     try:
-        # 입력 CSV 파일 읽기
-        df = pd.read_csv(input_file)
+        # DataFrame 생성
+        df = pd.DataFrame(filings, columns=['Ticker', 'Accession Number', 'URL', 'Filing Date'])
         total_rows = len(df)
         
         # Item 유형과 본문을 저장할 새로운 컬럼 추가
@@ -314,18 +334,8 @@ def add_item_types_to_filings(input_file):
             df.at[idx, 'Item Descriptions (EN)'] = item_descriptions_en
             df.at[idx, 'Item Descriptions (KR)'] = item_descriptions_kr
             df.at[idx, 'Content'] = content
-            
-            # URL에서 accessionNumber 추출
-            acc_num = re.search(r'/(\d{10}-\d{2}-\d{6})/', row['URL'])
-            if acc_num:
-                df.at[idx, 'Accession Number'] = acc_num.group(1)
         
-        # 결과를 새로운 CSV 파일로 저장 (한글 깨짐 방지를 위해 utf-8-sig 사용)
-        output_file = input_file.replace('.csv', '_with_content.csv')
-        df.to_csv(output_file, index=False, encoding='utf-8-sig')
-        print(f"\n아이템 유형과 본문이 추가된 파일이 {output_file}에 저장되었습니다.")
-        
-        # Item별로 행 분리하여 새로운 CSV 파일 생성
+        # Item별로 행 분리
         rows = []
         for _, row in df.iterrows():
             # 각 필드 분리 (쉼표+공백 조합도 고려)
@@ -376,24 +386,25 @@ def add_item_types_to_filings(input_file):
                     'Content': content
                 })
         
-        # 분리된 데이터를 새로운 CSV 파일로 저장
-        split_df = pd.DataFrame(rows)
-        final_output_file = output_file.replace('_with_content.csv', '_split.csv')
-        split_df.to_csv(final_output_file, index=False, encoding='utf-8-sig')
-        print(f'Item별로 분리된 데이터가 {final_output_file}에 저장되었습니다.')
+        return pd.DataFrame(rows)
         
     except Exception as e:
         print(f"처리 중 오류 발생: {str(e)}")
+        return None
 
 if __name__ == "__main__":
-    # URL 수집 함수 호출 (현재는 주석 처리)
-    collect_all_recent_8k_filings()
+    # 현재 날짜 기준으로 공시 수집
+    end_date = datetime.now()
+    filings = collect_all_recent_8k_filings(end_date)
     
-    # 가장 최근의 8-K 파일 찾기
-    csv_files = [f for f in os.listdir('.') if f.startswith('8k_filings_') and f.endswith('.csv')]
-    if csv_files:
-        latest_file = max(csv_files)
-        print(f"처리할 파일: {latest_file}")
-        add_item_types_to_filings(latest_file)
+    if filings:
+        # 수집된 공시 처리
+        result_df = process_filings(filings)
+        
+        if result_df is not None:
+            # 최종 결과를 CSV 파일로 저장
+            output_file = f'8k_filings_{end_date.strftime("%Y%m%d")}.csv'
+            result_df.to_csv(output_file, index=False, encoding='utf-8-sig')
+            print(f"\n처리된 데이터가 {output_file}에 저장되었습니다.")
     else:
         print("처리할 8-K 파일을 찾을 수 없습니다.")
