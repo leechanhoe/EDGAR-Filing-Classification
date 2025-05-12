@@ -147,86 +147,90 @@ def collect_all_recent_8k_filings(end_date=None):
 def extract_filing_content(url):
     """
     8-K 공시 URL에서 Item 유형과 본문을 추출합니다.
-    
+
     Args:
         url (str): 공시 URL
-        
+
     Returns:
         tuple: (Item 유형 리스트, 본문 텍스트)
     """
     headers = {
-        'User-Agent': 'Chan Lee (klavier0823@gmail.com)',
-        'Accept-Encoding': 'gzip, deflate',
-        'Host': 'www.sec.gov'
+        "User-Agent": "Chan Lee (klavier0823@gmail.com)",
+        "Accept-Encoding": "gzip, deflate",
+        "Host": "www.sec.gov",
     }
-    
+
     try:
         time.sleep(0.1)  # SEC API 요청 제한 준수
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        
+
         # windows-1252 인코딩으로 설정
-        response.encoding = 'windows-1252'
-            
+        response.encoding = "windows-1252"
+
         # HTML 파싱
-        soup = BeautifulSoup(response.text, 'html.parser', from_encoding='windows-1252')
-        
+        soup = BeautifulSoup(response.text, "html.parser", from_encoding="windows-1252")
+
         # 불필요한 태그 제거
-        for tag in soup.find_all(['script', 'style']):
+        for tag in soup.find_all(["script", "style"]):
             tag.decompose()
-        
+
         # 텍스트 추출 및 정제
         paragraphs = []
         for tag in soup.stripped_strings:
             # 특수 문자 처리를 위한 정규식
-            cleaned_text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', tag)
+            cleaned_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", tag)
             # 연속된 공백을 하나로 변환
             # cleaned_text = re.sub(r'[ \t]+', ' ', cleaned_text)
             if cleaned_text.strip():
                 paragraphs.append(cleaned_text.strip())
-        
+
         # 줄바꿈을 유지하면서 텍스트 결합
-        text = '\n\n'.join(paragraphs)
-        
+        text = "\n\n".join(paragraphs)
+
         # Item 패턴 찾기 (예: Item 1.01, Item 8.01 등) - 대소문자 구분 없이
-        items = re.findall(r'(?i)item\s+(\d+\.\d+)', text)
+        items = re.findall(r"(?i)item\s*\.?\s*(\d+\.\d+)", text)
         items = list(set(items))  # 중복 제거
-        
+
         # 본문 추출
         # 첫 번째 Item이 나오는 위치 찾기 - 대소문자 구분 없이
-        first_item_match = re.search(r'(?i)item\s+\d+\.\d+', text)
+        first_item_match = re.search(r"(?i)item\s*\.?\s*(\d+\.\d+)", text)
         if first_item_match:
             start_pos = first_item_match.start()
-            
+
             # 모든 'SIGNATURES' 위치 찾기 - 대소문자 구분 없이
-            signature_positions = [m.start() for m in re.finditer(r'(?i)signatures?', text[start_pos:])]
-            
+            signature_positions = [
+                m.start() for m in re.finditer(r"(?i)signatures?", text[start_pos:])
+            ]
+
             if signature_positions:
                 # 마지막 'SIGNATURES' 위치 사용
                 end_pos = start_pos + signature_positions[-1]
                 content = text[start_pos:end_pos].strip()
             else:
                 content = text[start_pos:].strip()
-                
+
             # 특수 문자 처리
             # content = content.encode('ascii', 'ignore').decode('ascii')
-            content = re.sub(r'\s*\n\s*', '\n', content)  # 줄바꿈 주변 공백 제거
+            content = re.sub(r"\s*\n\s*", "\n", content)  # 줄바꿈 주변 공백 제거
             content = clean_non_ascii_newlines(content)
         else:
             content = ""
-        
+
         return items, content
-        
+
     except Exception as e:
         print(f"공시 내용 추출 실패 ({url}): {str(e)}")
         return [], ""
+
 
 def clean_non_ascii_newlines(text):
     """
     아스키코드가 아닌 값들은 가끔 앞or뒤에 줄바꿈이 있는 경우가 있어 줄바꿈 제거
     """
     # 앞뒤 줄바꿈이 하나도 없어도, 하나만 있어도, 여러 개 있어도 모두 매칭
-    return re.sub(r'\n*([^\x00-\x7F])\n*', r'\1', text)
+    return re.sub(r"\n*([^\x00-\x7F])\n*", r"\1", text)
+
 
 # Item 유형 매핑 정의
 item_type_mapping_en = {
@@ -261,7 +265,7 @@ item_type_mapping_en = {
     "6.05": "Securities Act Updating Disclosure",
     "7.01": "Regulation FD Disclosure",
     "8.01": "Other Events",
-    "9.01": "Financial Statements and Exhibits"
+    "9.01": "Financial Statements and Exhibits",
 }
 
 item_type_mapping_kr = {
@@ -296,100 +300,157 @@ item_type_mapping_kr = {
     "6.05": "증권법 공시 업데이트",
     "7.01": "Regulation FD(공정공시) 공시",
     "8.01": "기타 사건 공시",
-    "9.01": "재무제표 및 첨부자료 제출"
+    "9.01": "재무제표 및 첨부자료 제출",
 }
+
+
+def split_by_items_whitespace_agnostic(content_full, item_numbers, item_type_mapping):
+    """
+    공백과 줄바꿈, 알파벳/숫자 외 문자를 모두 제거한 뒤
+    Item 번호+설명을 기준으로 원본 콘텐츠를 분리합니다.
+    Returns: dict of { item_code: item_content_str }
+    """
+    # 1) 원본 -> 압축문자 매핑 생성 (소문자, 알파벳+숫자만)
+    compressed_chars = []
+    orig_to_comp = []
+    for idx, ch in enumerate(content_full):
+        if ch.isspace():
+            continue
+        cl = ch.lower()
+        if re.match(r"[a-z0-9]", cl):
+            compressed_chars.append(cl)
+            orig_to_comp.append(idx)
+        # else: 알파벳/숫자 외 문자는 모두 무시
+    compressed = "".join(compressed_chars)
+
+    # 2) 각 Item 시작 위치 찾기
+    item_ranges = {}
+    for item in item_numbers:
+        # 설명(desc)도 동일하게 filter
+        desc = item_type_mapping.get(item, "")
+        desc_cmp = re.sub(r"\s+", "", desc).lower()
+        desc_cmp = re.sub(r"[^a-z0-9]", "", desc_cmp)
+
+        # item 번호(f.e. "5.03") 필터링
+        item_num_cmp = item.lower()
+        item_num_cmp = re.sub(r"[^a-z0-9]", "", item_num_cmp)
+
+        # 패턴: "item" + 번호 + 설명, 모두 알파벳/숫자만
+        pattern_cmp = re.escape("item") + re.escape(item_num_cmp) + re.escape(desc_cmp)
+
+        m = re.search(pattern_cmp, compressed)
+        if m:
+            item_ranges[item] = [m.start(), None]
+
+    # 3) 각 Item 끝 위치 결정
+    sorted_items = sorted(item_ranges.items(), key=lambda kv: kv[1][0])
+    for (it, (st, _)), (nxt, (nst, _)) in zip(sorted_items, sorted_items[1:]):
+        item_ranges[it][1] = nst
+    if sorted_items:
+        last = sorted_items[-1][0]
+        item_ranges[last][1] = len(compressed)
+
+    # 4) 압축 -> 원본 매핑 후 내용 추출
+    result = {}
+    for it, (cstart, cend) in item_ranges.items():
+        orig_start = orig_to_comp[cstart]
+        orig_end = orig_to_comp[cend - 1] + 1
+        result[it] = content_full[orig_start:orig_end].strip()
+
+    return result
+
 
 def process_filings(filings):
     """
     수집된 공시 데이터를 처리하여 Item 유형과 본문을 추출하고 Item별로 분리합니다.
-    
     Args:
-        filings (list): (티커, Accession Number, URL, 공시일자) 튜플의 리스트
-        
+        filings (list or None): (Ticker, Accession Number, URL, Filing Date) 튜플의 리스트,
+                              None일 경우 중간 CSV를 불러와 처리
     Returns:
         pandas.DataFrame: 처리된 데이터를 담은 DataFrame
     """
     try:
-        # DataFrame 생성
-        df = pd.DataFrame(filings, columns=['Ticker', 'Accession Number', 'URL', 'Filing Date'])
-        total_rows = len(df)
-        
-        # Item 유형과 본문을 저장할 새로운 컬럼 추가
-        df['Item Numbers'] = ''
-        df['Item Descriptions (EN)'] = ''
-        df['Item Descriptions (KR)'] = ''
-        df['Content'] = ''
-        
-        # 각 URL에 대해 Item 유형과 본문 추출
-        for idx, row in df.iterrows():
-            print(f"처리 중: {idx + 1}/{total_rows}")
-            items, content = extract_filing_content(row['URL'])
-            
-            # Item 번호와 설명을 저장
-            item_numbers = ', '.join(sorted(items))
-            item_descriptions_en = ', '.join(item_type_mapping_en.get(item, "Unknown") for item in sorted(items))
-            item_descriptions_kr = ', '.join(item_type_mapping_kr.get(item, "알 수 없음") for item in sorted(items))
-            
-            df.at[idx, 'Item Numbers'] = item_numbers
-            df.at[idx, 'Item Descriptions (EN)'] = item_descriptions_en
-            df.at[idx, 'Item Descriptions (KR)'] = item_descriptions_kr
-            df.at[idx, 'Content'] = content
-        
-        # Item별로 행 분리
+        intermediate_file = "before_split.csv"
+        if filings is None:
+            # 이전에 저장된 중간 결과만 로드
+            if not os.path.exists(intermediate_file):
+                print(f"Intermediate file '{intermediate_file}' not found.")
+                return None
+            df = pd.read_csv(intermediate_file, encoding="utf-8-sig")
+        else:
+            # 1) 원본 DataFrame 생성
+            df = pd.DataFrame(
+                filings, columns=["Ticker", "Accession Number", "URL", "Filing Date"]
+            )
+            total = len(df)
+            df["Item Numbers"] = ""
+            df["Item Descriptions (EN)"] = ""
+            df["Item Descriptions (KR)"] = ""
+            df["Content"] = ""
+
+            # 2) URL별로 Item, Content 추출
+            for idx, row in df.iterrows():
+                print(f"Processing {idx+1}/{total}")
+                items, content_full = extract_filing_content(row["URL"])
+                items_sorted = sorted(items)
+                df.at[idx, "Item Numbers"] = ", ".join(items_sorted)
+                df.at[idx, "Item Descriptions (EN)"] = ", ".join(
+                    item_type_mapping_en.get(i, "") for i in items_sorted
+                )
+                df.at[idx, "Item Descriptions (KR)"] = ", ".join(
+                    item_type_mapping_kr.get(i, "") for i in items_sorted
+                )
+                df.at[idx, "Content"] = content_full
+
+            # 3) Content 분리 전 중간 결과를 CSV로 저장
+            df.to_csv(intermediate_file, index=False, encoding="utf-8-sig")
+            print(f"Intermediate DataFrame saved to {intermediate_file}")
+
+        # 4) 중간 DataFrame 기준 Item별 확장
         rows = []
         for _, row in df.iterrows():
-            # 각 필드 분리 (쉼표+공백 조합도 고려)
-            item_numbers = [x.strip() for x in str(row['Item Numbers']).split(',') if x.strip()]
-            item_desc_en = [x.strip() for x in str(row['Item Descriptions (EN)']).split(',') if x.strip()]
-            item_desc_kr = [x.strip() for x in str(row['Item Descriptions (KR)']).split(',') if x.strip()]
-            content_full = str(row['Content'])
-            
-            # Content를 Item별로 분리
-            item_contents = {}
-            current_item = None
-            current_content = []
-            
-            # Content를 줄 단위로 분리
-            lines = content_full.split('\n')
-            for line in lines:
-                # Item 패턴 찾기 (대소문자 구분 없이)
-                for item in item_numbers:
-                    pattern = f'item\\s*{item}'
-                    if re.search(pattern, line.lower()):
-                        if current_item and current_content:
-                            item_contents[current_item] = '\n'.join(current_content)
-                        current_item = item
-                        current_content = [line]
-                        break
-                else:
-                    if current_item:
-                        current_content.append(line)
-            
-            # 마지막 Item의 content 저장
-            if current_item and current_content:
-                item_contents[current_item] = '\n'.join(current_content)
+            item_numbers = [
+                i.strip() for i in str(row["Item Numbers"]).split(",") if i.strip()
+            ]
+            content_full = str(row["Content"])
 
-            # 각 Item별로 행 생성
-            for i, item in enumerate(item_numbers):
-                desc_en = item_desc_en[i] if i < len(item_desc_en) else ''
-                desc_kr = item_desc_kr[i] if i < len(item_desc_kr) else ''
-                content = item_contents.get(item, '')
-                
-                rows.append({
-                    'Ticker': row['Ticker'],
-                    'URL': row['URL'],
-                    'Filing Date': row['Filing Date'],
-                    'Accession Number': row['Accession Number'],
-                    'Item Numbers': item,
-                    'Item Descriptions (EN)': desc_en,
-                    'Item Descriptions (KR)': desc_kr,
-                    'Content': content
-                })
-        
+            # 공백 무시 방식으로 Item별 내용 분리
+            item_contents = split_by_items_whitespace_agnostic(
+                content_full, item_numbers, item_type_mapping_en
+            )
+
+            # 각 Item에 대해 새로운 행 생성
+            # 1) 비어 있는 Item을 위한 fallback 콘텐츠 계산
+            #    전체 본문에서, 정상 분리된 콘텐츠들을 모두 제거
+            remainder = content_full
+            for cnt in item_contents.values():
+                if cnt:  # 빈 문자열이 아닌 것만 제거
+                    remainder = remainder.replace(cnt, "")
+            fallback_content = remainder.strip()
+
+            # 2) 각 Item별로 콘텐츠 선택
+            for item in item_numbers:
+                cnt = item_contents.get(item, "")
+                # cnt가 빈 문자열이면 fallback_content로 대체
+                final_content = cnt if cnt else fallback_content
+
+                rows.append(
+                    {
+                        "Ticker": row["Ticker"],
+                        "Accession Number": row["Accession Number"],
+                        "URL": row["URL"],
+                        "Filing Date": row["Filing Date"],
+                        "Item Numbers": item,
+                        "Item Descriptions (EN)": item_type_mapping_en.get(item, ""),
+                        "Item Descriptions (KR)": item_type_mapping_kr.get(item, ""),
+                        "Content": final_content,
+                    }
+                )
+
         return pd.DataFrame(rows)
-        
+
     except Exception as e:
-        print(f"처리 중 오류 발생: {str(e)}")
+        print(f"Error in processing filings: {e}")
         return None
 
 if __name__ == "__main__":

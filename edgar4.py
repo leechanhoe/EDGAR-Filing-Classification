@@ -380,49 +380,82 @@ item_type_mapping_kr = {
     "9.01": "재무제표 및 첨부자료 제출",
 }
 
+# 1) 분할 전용 매핑: 첫 단어만, 소문자, s optional
+item_type_mapping_for_split = {
+    "1.01": r"Entry",     # Entry or Entrys
+    "1.02": r"Termination",
+    "1.03": r"Bankruptcy",
+    "1.04": r"Mine",
+    "1.05": r"Material",
+    "2.01": r"Completion",
+    "2.02": r"Result",
+    "2.03": r"Creation",
+    "2.04": r"Triggering",
+    "2.05": r"Cost",
+    "2.06": r"Material",
+    "3.01": r"Notice",
+    "3.02": r"Unregistered",
+    "3.03": r"Material",
+    "4.01": r"Change",    # Changes? (원본엔 Change이지만 Changes 허용)
+    "4.02": r"Non-Reliance",
+    "5.01": r"Change",
+    "5.02": r"Departure",
+    "5.03": r"Amendment",
+    "5.04": r"Temporary",
+    "5.05": r"Amendment",
+    "5.06": r"Change",
+    "5.07": r"Submission",
+    "5.08": r"Shareholder",
+    "6.01": r"ABS",
+    "6.02": r"Change",     # Change or Changes
+    "6.03": r"Change",
+    "6.04": r"Failure",
+    "6.05": r"Securitie",
+    "7.01": r"Regulation",
+    "8.01": r"Other",
+    "9.01": r"(?:exhibit|financial|\(d\))s?",   # Exhibits 또는 Exhibit
+}
 
-import re
-
-
-def split_by_items_whitespace_agnostic(content_full, item_numbers, item_type_mapping):
+def split_by_items_whitespace_agnostic(content_full, item_numbers, mapping):
     """
-    공백과 줄바꿈, 알파벳/숫자 외 문자를 모두 제거한 뒤
-    Item 번호+설명을 기준으로 원본 콘텐츠를 분리합니다.
+    공백/줄바꿈/비영숫자 제거 + 
+    'itemX.XX' + optional '.' + 매핑 앞글자(s?) 를 기준으로 분리.
     Returns: dict of { item_code: item_content_str }
     """
-    # 1) 원본 -> 압축문자 매핑 생성 (소문자, 알파벳+숫자만)
+    # 1) 원본 → 압축문자 매핑
     compressed_chars = []
     orig_to_comp = []
     for idx, ch in enumerate(content_full):
         if ch.isspace():
             continue
         cl = ch.lower()
-        if re.match(r"[a-z0-9]", cl):
+        if re.match(r"[a-z0-9\(\)]", cl):
             compressed_chars.append(cl)
             orig_to_comp.append(idx)
-        # else: 알파벳/숫자 외 문자는 모두 무시
     compressed = "".join(compressed_chars)
-
-    # 2) 각 Item 시작 위치 찾기
     item_ranges = {}
+
     for item in item_numbers:
-        # 설명(desc)도 동일하게 filter
-        desc = item_type_mapping.get(item, "")
-        desc_cmp = re.sub(r"\s+", "", desc).lower()
-        desc_cmp = re.sub(r"[^a-z0-9]", "", desc_cmp)
+        # 1) 매핑값(정규식 그룹) 그대로 읽어와 소문자
+        fw_raw = mapping.get(item, "")
+        if not fw_raw:
+            continue
+        # 이미 소문자, [a-z0-9()]와 '|' 와 '?' 만 남아 있다고 가정
+        fw_pattern = fw_raw.lower()
 
-        # item 번호(f.e. "5.03") 필터링
-        item_num_cmp = item.lower()
-        item_num_cmp = re.sub(r"[^a-z0-9]", "", item_num_cmp)
+        # 2) item 번호 정제 (숫자만)
+        num = re.sub(r"[^0-9]", "", item)   # '9.01' -> '901'
 
-        # 패턴: "item" + 번호 + 설명, 모두 알파벳/숫자만
-        pattern_cmp = re.escape("item") + re.escape(item_num_cmp) + re.escape(desc_cmp)
+        # 3) 최종 패턴 조합
+        #    - 'item' + optional '.' + 번호 + optional '.' + (exhibit|financial)s?
+        pat = rf"item\.?{num}\.?{fw_pattern}"
 
-        m = re.search(pattern_cmp, compressed)
+        # 4) 검색
+        m = re.search(pat, compressed)
         if m:
             item_ranges[item] = [m.start(), None]
 
-    # 3) 각 Item 끝 위치 결정
+    # 3) 끝 위치 결정
     sorted_items = sorted(item_ranges.items(), key=lambda kv: kv[1][0])
     for (it, (st, _)), (nxt, (nst, _)) in zip(sorted_items, sorted_items[1:]):
         item_ranges[it][1] = nst
@@ -430,11 +463,11 @@ def split_by_items_whitespace_agnostic(content_full, item_numbers, item_type_map
         last = sorted_items[-1][0]
         item_ranges[last][1] = len(compressed)
 
-    # 4) 압축 -> 원본 매핑 후 내용 추출
+    # 4) 압축→원본 매핑 후 자르기
     result = {}
     for it, (cstart, cend) in item_ranges.items():
         orig_start = orig_to_comp[cstart]
-        orig_end = orig_to_comp[cend - 1] + 1
+        orig_end   = orig_to_comp[cend-1] + 1
         result[it] = content_full[orig_start:orig_end].strip()
 
     return result
@@ -496,7 +529,7 @@ def process_filings(filings):
 
             # 공백 무시 방식으로 Item별 내용 분리
             item_contents = split_by_items_whitespace_agnostic(
-                content_full, item_numbers, item_type_mapping_en
+                content_full, item_numbers, item_type_mapping_for_split
             )
 
             # 각 Item에 대해 새로운 행 생성
